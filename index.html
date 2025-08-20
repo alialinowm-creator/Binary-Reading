@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPUB 仿生阅读转换器</title>
+    <!-- 引入 Tailwind CSS 以美化界面 -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 引入 JSZip 库来处理 EPUB (ZIP) 文件 -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        /* 自定义样式，用于拖拽时的视觉效果 */
+        .drag-over {
+            border-color: #3b82f6; /* blue-500 */
+            background-color: #eff6ff; /* blue-50 */
+        }
+        /* 加载动画 */
+        .loader {
+            border: 4px solid #f3f4f6; /* gray-100 */
+            border-top: 4px solid #3b82f6; /* blue-500 */
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex items-center justify-center min-h-screen p-4">
+
+    <div class="w-full max-w-2xl bg-white rounded-xl shadow-lg p-8 space-y-6">
+        <!-- 头部信息 -->
+        <div class="text-center">
+            <h1 class="text-3xl font-bold text-gray-800">EPUB 仿生阅读转换器</h1>
+            <p class="text-gray-500 mt-2">在浏览器中为你的英文 EPUB 文件开启“仿生阅读”模式。</p>
+        </div>
+
+        <!-- 文件上传区域 -->
+        <div id="upload-area" class="border-2 border-dashed border-gray-300 rounded-lg p-10 text-center cursor-pointer hover:border-blue-500 transition-colors">
+            <input type="file" id="file-input" class="hidden" accept=".epub">
+            <div class="flex flex-col items-center">
+                <svg class="w-12 h-12 text-gray-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0l-3 3m3-3l3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.33-2.196A4.5 4.5 0 0119.5 12v.75a4.5 4.5 0 01-4.5 4.5H6.75z" />
+                </svg>
+                <p class="mt-4 text-gray-600">
+                    <span class="font-semibold text-blue-600">点击选择文件</span> 或拖拽到此处
+                </p>
+                <p class="text-xs text-gray-500 mt-1">仅支持 .epub 格式</p>
+            </div>
+        </div>
+
+        <!-- 进度和状态显示区域 -->
+        <div id="status-area" class="hidden space-y-3 text-center">
+            <div class="flex items-center justify-center space-x-3">
+                 <div id="loader" class="loader"></div>
+                 <p id="status-text" class="text-gray-700 font-medium">正在处理文件...</p>
+            </div>
+            <div class="w-full bg-gray-200 rounded-full h-2.5">
+                <div id="progress-bar" class="bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+            </div>
+        </div>
+        
+        <!-- 结果和下载区域 -->
+        <div id="result-area" class="hidden text-center">
+             <svg class="w-16 h-16 text-green-500 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            <h2 class="text-2xl font-semibold text-gray-800 mt-4">处理完成！</h2>
+            <p class="text-gray-600 mt-2">你的 EPUB 文件已准备就绪，可以下载了。</p>
+            <button id="download-btn" class="mt-6 bg-blue-600 text-white font-bold py-3 px-6 rounded-lg hover:bg-blue-700 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50">
+                下载已处理的文件
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // 获取页面上的各个元素
+        const uploadArea = document.getElementById('upload-area');
+        const fileInput = document.getElementById('file-input');
+        const statusArea = document.getElementById('status-area');
+        const statusText = document.getElementById('status-text');
+        const progressBar = document.getElementById('progress-bar');
+        const resultArea = document.getElementById('result-area');
+        const downloadBtn = document.getElementById('download-btn');
+        const loader = document.getElementById('loader');
+
+        let processedBlob = null;
+        let originalFilename = '';
+
+        // --- 事件监听 ---
+
+        // 点击上传区域时，触发文件选择框
+        uploadArea.addEventListener('click', () => fileInput.click());
+
+        // 当用户选择文件后
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        });
+
+        // 处理拖拽事件
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            uploadArea.addEventListener(eventName, preventDefaults, false);
+        });
+
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+
+        uploadArea.addEventListener('dragenter', () => uploadArea.classList.add('drag-over'));
+        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('drag-over'));
+        uploadArea.addEventListener('drop', (event) => {
+            uploadArea.classList.remove('drag-over');
+            const file = event.dataTransfer.files[0];
+            if (file) {
+                handleFile(file);
+            }
+        });
+        
+        // 点击下载按钮
+        downloadBtn.addEventListener('click', () => {
+            if (processedBlob) {
+                const url = URL.createObjectURL(processedBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                // 生成新的文件名
+                const base = originalFilename.replace(/\.epub$/i, '');
+                a.download = `${base}_bionic.epub`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            }
+        });
+
+        // --- 核心处理逻辑 ---
+
+        async function handleFile(file) {
+            if (!file.name.toLowerCase().endsWith('.epub')) {
+                alert('请上传一个有效的 .epub 文件！');
+                return;
+            }
+            originalFilename = file.name;
+            
+            // 切换界面显示
+            uploadArea.classList.add('hidden');
+            statusArea.classList.remove('hidden');
+            resultArea.classList.add('hidden');
+            progressBar.style.width = '0%';
+            statusText.textContent = '正在读取 EPUB 文件...';
+
+            try {
+                const zip = await JSZip.loadAsync(file);
+                
+                // 1. 解析 container.xml 找到 .opf 文件
+                statusText.textContent = '解析元数据...';
+                const containerXml = await zip.file('META-INF/container.xml').async('string');
+                const parser = new DOMParser();
+                const containerDoc = parser.parseFromString(containerXml, 'application/xml');
+                const opfPath = containerDoc.getElementsByTagName('rootfile')[0].getAttribute('full-path');
+                
+                // 2. 解析 .opf 文件找到内容清单
+                const opfContent = await zip.file(opfPath).async('string');
+                const opfDoc = parser.parseFromString(opfContent, 'application/xml');
+                const manifestItems = opfDoc.getElementsByTagName('item');
+                
+                const htmlFiles = [];
+                for (let i = 0; i < manifestItems.length; i++) {
+                    const item = manifestItems[i];
+                    const mediaType = item.getAttribute('media-type');
+                    if (mediaType === 'application/xhtml+xml' || mediaType === 'text/html') {
+                        // 路径需要相对于 OPF 文件
+                        const opfDir = opfPath.substring(0, opfPath.lastIndexOf('/'));
+                        const href = item.getAttribute('href');
+                        const fullPath = (opfDir ? opfDir + '/' : '') + href;
+                        htmlFiles.push(fullPath);
+                    }
+                }
+
+                // 3. 遍历并处理每个 HTML 文件
+                for (let i = 0; i < htmlFiles.length; i++) {
+                    const path = htmlFiles[i];
+                    const progress = Math.round(((i + 1) / htmlFiles.length) * 100);
+                    statusText.textContent = `正在处理内容 (${i + 1}/${htmlFiles.length})...`;
+                    progressBar.style.width = `${progress}%`;
+
+                    if (zip.file(path)) {
+                        const htmlContent = await zip.file(path).async('string');
+                        const modifiedHtml = processHtmlContent(htmlContent);
+                        zip.file(path, modifiedHtml);
+                    }
+                }
+
+                // 4. 生成新的 EPUB 文件
+                statusText.textContent = '正在生成新的 EPUB 文件...';
+                loader.classList.remove('hidden');
+                processedBlob = await zip.generateAsync({ type: 'blob', mimeType: 'application/epub+zip' });
+                
+                // 切换到结果界面
+                statusArea.classList.add('hidden');
+                resultArea.classList.remove('hidden');
+
+            } catch (error) {
+                console.error('处理 EPUB 时出错:', error);
+                statusText.textContent = `处理失败: ${error.message}`;
+                loader.classList.add('hidden');
+            }
+        }
+
+        // 仿生阅读规则词典
+        const suffixes = [
+            'ly', 'ion', 'ness', 'ed', 'al', 'ive', 'ing', 'ar', 'er', 'ir', 'or', 'ur',
+            'itude', 'able', 'ible', 'ary', 'ate', 'ess', 'less', 'ship', 'fy', 'ic', 'um',
+            'us', 'ty', 'ity', 'ant', 'ent', 'end', 'and', 'ance', 'ence', 'ancy', 'ency',
+            'id', 'te', 'ize', 'ise', 'ous', 'hood', 'icle', 'cle', 'et', 'kin', 'let', 'y',
+            'ward', 'wise', 'dom', 'craft', 'cracy', 'ice', 'ology', 'graphy', 'ry', 'ment',
+            'ship', 'fy', 'en', 'ate', 'ish'
+        ];
+        // 按长度降序排序，以便优先匹配更长的后缀
+        const sortedSuffixes = suffixes.sort((a, b) => b.length - a.length);
+
+        const prepositions = new Set([
+            'the', 'and', 'in', 'on', 'at', 'by', 'with', 'about', 'against', 'between', 'into',
+            'through', 'during', 'before', 'after', 'above', 'below', 'to', 'from', 'up', 'down',
+            'over', 'under', 'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where',
+            'why', 'how', 'all', 'any', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'a', 'an'
+        ]);
+
+        function processHtmlContent(htmlString) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlString, "application/xhtml+xml");
+
+            if (doc.getElementsByTagName("parsererror").length) {
+                console.warn("解析 XHTML 文件时出错。文件可能已损坏或格式不规范。");
+                return htmlString;
+            }
+
+            function walkAndReplace(node) {
+                if (node.nodeType === 3) { // 文本节点
+                    const text = node.nodeValue;
+                    if (!text.trim()) return;
+
+                    const parent = node.parentNode;
+                    if (!parent || ['script', 'style', 'title', 'b', 'strong'].includes(parent.tagName.toLowerCase())) {
+                        return;
+                    }
+
+                    const fragment = doc.createDocumentFragment();
+                    const parts = text.split(/(\s+)/);
+
+                    parts.forEach(part => {
+                        if (part) {
+                            fragment.appendChild(createBionicNode(part, doc));
+                        }
+                    });
+                    
+                    parent.replaceChild(fragment, node);
+                } else if (node.nodeType === 1) { // 元素节点
+                    Array.from(node.childNodes).forEach(walkAndReplace);
+                }
+            }
+            
+            if (doc.body) {
+                walkAndReplace(doc.body);
+            }
+
+            const serializer = new XMLSerializer();
+            return serializer.serializeToString(doc);
+        }
+
+        /**
+         * [UPDATED] 根据新的智能规则创建仿生阅读节点
+         */
+        function createBionicNode(word, doc) {
+            const fragment = doc.createDocumentFragment();
+            const match = word.match(/^([^a-zA-Z]*)?([a-zA-Z]+)([^a-zA-Z]*)?$/);
+            
+            if (!match) {
+                return doc.createTextNode(word);
+            }
+
+            const prefix = match[1] || '';
+            const text = match[2] || '';
+            const suffix = match[3] || '';
+
+            if (prefix) fragment.appendChild(doc.createTextNode(prefix));
+
+            if (text) {
+                const textLower = text.toLowerCase();
+                let nodeCreated = false;
+
+                // 规则 1: 介词或常用词 (只加粗第一个字母)
+                if (prepositions.has(textLower)) {
+                    const b = doc.createElement('b');
+                    b.appendChild(doc.createTextNode(text.substring(0, 1)));
+                    fragment.appendChild(b);
+                    fragment.appendChild(doc.createTextNode(text.substring(1)));
+                    nodeCreated = true;
+                }
+                
+                // 规则 2: 检查后缀 (加粗后缀前的部分)
+                if (!nodeCreated) {
+                    for (const s of sortedSuffixes) {
+                        if (textLower.endsWith(s) && text.length > s.length) {
+                            const stemLength = text.length - s.length;
+                            const b = doc.createElement('b');
+                            b.appendChild(doc.createTextNode(text.substring(0, stemLength)));
+                            fragment.appendChild(b);
+                            fragment.appendChild(doc.createTextNode(text.substring(stemLength)));
+                            nodeCreated = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 规则 3: 默认规则 (根据单词长度智能加粗)
+                if (!nodeCreated) {
+                    let boldLen;
+                    if (text.length > 4) {
+                        // 长度大于4，加粗一半（向下取整）
+                        boldLen = Math.floor(text.length / 2);
+                    } else {
+                        // 长度小于等于4，只加粗第一个字母
+                        boldLen = 1;
+                    }
+                    const b = doc.createElement('b');
+                    b.appendChild(doc.createTextNode(text.substring(0, boldLen)));
+                    fragment.appendChild(b);
+                    fragment.appendChild(doc.createTextNode(text.substring(boldLen)));
+                }
+            }
+
+            if (suffix) fragment.appendChild(doc.createTextNode(suffix));
+
+            return fragment;
+        }
+
+    </script>
+</body>
+</html>
